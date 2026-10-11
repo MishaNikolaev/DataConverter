@@ -1,0 +1,84 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  build-and-test:
+    name: Build and test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+
+    steps:
+      - name: Get source
+        uses: actions/checkout@v4
+
+      - name: Install dependencies (Ubuntu)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build g++
+
+      - name: Install dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          if ! command -v cmake >/dev/null 2>&1; then brew install cmake; fi
+          if ! command -v ninja >/dev/null 2>&1; then brew install ninja; fi
+
+      - name: Show toolchain
+        run: cmake --version
+
+      - name: Cache dependencies and build tree
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/build
+          key: ${{ runner.os }}-build-${{ hashFiles('CMakeLists.txt', 'src/**', 'tests/**', 'third_party/**') }}
+          restore-keys: |
+            ${{ runner.os }}-build-
+
+      - name: Configure (Unix)
+        if: runner.os != 'Windows'
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_STANDARD=17
+
+      - name: Configure (Windows)
+        if: runner.os == 'Windows'
+        run: cmake -S . -B build -DCMAKE_CXX_STANDARD=17
+
+      - name: Build
+        run: cmake --build build --config Release --parallel
+
+      - name: Test
+        run: |
+          cmake -E make_directory test-results
+          ctest --test-dir build -C Release --output-on-failure --output-junit test-results/junit.xml --output-log test-results/ctest.log
+
+      - name: Upload test report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-report-${{ matrix.os }}
+          path: test-results/
+          if-no-files-found: ignore
+
+      - name: Upload application (Unix)
+        if: success() && runner.os != 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: dataconv-${{ matrix.os }}
+          path: build/dataconv
+
+      - name: Upload application (Windows)
+        if: success() && runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: dataconv-${{ matrix.os }}
+          path: build/Release/dataconv.exe
